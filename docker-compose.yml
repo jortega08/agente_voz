@@ -37,8 +37,7 @@ services:
       APP_ENV: development
       APP_DEBUG: "true"
       CORS_ORIGINS: http://localhost:3000
-      WHISPER_DEVICE: cpu
-      PERSONAPLEX_DEVICE: cpu
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
     depends_on:
       db:
         condition: service_healthy

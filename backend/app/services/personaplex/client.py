@@ -1,17 +1,15 @@
 """
-PersonaPlex client for speech-to-speech conversation.
+Conversation client powered by OpenAI GPT.
 
-This module wraps the PersonaPlex model from NVIDIA for real-time
-voice-based conversation with configurable persona and strategy.
-
-Phase 1: Stub implementation returning placeholder responses.
-Will be replaced with actual PersonaPlex integration once the model
-is downloaded and configured.
+Replaces the local PersonaPlex model with the OpenAI Chat Completions API,
+maintaining the same interface and using the existing prompt templates.
 """
 
 import structlog
+from openai import AsyncOpenAI
 
 from app.config import get_settings
+from app.services.personaplex.prompts import SYSTEM_PROMPT, STRATEGY_PROMPTS, EMOTIONAL_RESPONSE_GUIDES
 
 logger = structlog.get_logger()
 
@@ -19,68 +17,63 @@ logger = structlog.get_logger()
 class PersonaPlexClient:
     def __init__(self):
         self.settings = get_settings()
-        self.model = None
-        self.is_loaded = False
+        self._client: AsyncOpenAI | None = None
 
-    async def load_model(self):
-        """Load PersonaPlex model into memory."""
-        logger.info(
-            "personaplex_load_requested",
-            model_path=self.settings.personaplex_model_path,
-            device=self.settings.personaplex_device,
-        )
-        # TODO: Load actual PersonaPlex model
-        # from personaplex import PersonaPlex
-        # self.model = PersonaPlex.from_pretrained(self.settings.personaplex_model_path)
-        # self.model.to(self.settings.personaplex_device)
-        self.is_loaded = True
-        logger.info("personaplex_model_loaded_stub")
+    def _get_client(self) -> AsyncOpenAI:
+        if self._client is None:
+            self._client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        return self._client
 
-    async def generate_response(
-        self,
-        audio_input: bytes,
-        persona_config: dict | None = None,
-        conversation_history: list[dict] | None = None,
-    ) -> bytes:
-        """
-        Generate a speech response from audio input.
+    def _build_system_prompt(self, persona_config: dict | None) -> str:
+        config = persona_config or {}
+        base = SYSTEM_PROMPT.replace("${original_amount}", str(config.get("original_amount", "N/A")))
+        base = base.replace("${negotiable_amount}", str(config.get("negotiable_amount", "N/A")))
+        base = base.replace("${days_past_due}", str(config.get("days_past_due", "N/A")))
+        strategy = config.get("strategy", "empathetic")
+        base = base.replace("${strategy}", strategy)
 
-        Args:
-            audio_input: Raw audio bytes from the user.
-            persona_config: Configuration for the agent persona (tone, strategy, etc.)
-            conversation_history: Previous turns for context.
+        strategy_guide = STRATEGY_PROMPTS.get(strategy, "")
+        emotional_state = config.get("emotional_state", "cooperative")
+        emotional_guide = EMOTIONAL_RESPONSE_GUIDES.get(emotional_state, "")
 
-        Returns:
-            Audio bytes of the agent response.
-        """
-        if not self.is_loaded:
-            await self.load_model()
-
-        # TODO: Replace with actual PersonaPlex inference
-        # response_audio = self.model.generate(
-        #     audio=audio_input,
-        #     persona=persona_config,
-        #     history=conversation_history,
-        # )
-        logger.info("personaplex_generate_stub", input_size=len(audio_input))
-        return b""
+        return f"{base}\n\n{strategy_guide}\n\n{emotional_guide}"
 
     async def generate_text_response(
         self,
         text_input: str,
         persona_config: dict | None = None,
+        conversation_history: list[dict] | None = None,
     ) -> str:
         """
-        Generate a text response (fallback for when STT/TTS pipeline is used
-        instead of end-to-end PersonaPlex).
+        Generate a text response using OpenAI GPT.
 
         Args:
             text_input: Transcribed user text.
-            persona_config: Agent persona configuration.
+            persona_config: Agent persona configuration (strategy, amounts, emotional_state).
+            conversation_history: Previous turns as list of {"role": ..., "content": ...}.
 
         Returns:
             Agent response text.
         """
-        # TODO: Replace with actual model inference or LLM call
-        logger.info("personaplex_text_generate_stub", input=text_input[:100])
-        return f"I understand your concern. Let me help you find the best solution for your situation."
+        client = self._get_client()
+        system_prompt = self._build_system_prompt(persona_config)
+
+        messages = [{"role": "system", "content": system_prompt}]
+        if conversation_history:
+            messages.extend(conversation_history)
+        messages.append({"role": "user", "content": text_input})
+
+        try:
+            response = await client.chat.completions.create(
+                model=self.settings.openai_model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=300,
+            )
+            reply = response.choices[0].message.content.strip()
+            logger.info("openai_response_generated", tokens=response.usage.total_tokens)
+            return reply
+
+        except Exception as e:
+            logger.error("openai_error", error=str(e))
+            return "I understand your concern. Let me help you find the best solution for your situation."

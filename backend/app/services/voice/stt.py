@@ -1,40 +1,40 @@
 """
-Speech-to-Text service using faster-whisper.
+Speech-to-Text service using OpenAI Whisper API.
 
 Converts raw audio bytes to text transcription.
 """
 
 import io
+import wave
 import structlog
-import numpy as np
+from openai import AsyncOpenAI
+
+from app.config import get_settings
 
 logger = structlog.get_logger()
 
-_model = None
+
+def _get_client() -> AsyncOpenAI:
+    settings = get_settings()
+    return AsyncOpenAI(api_key=settings.openai_api_key)
 
 
-def _get_model():
-    global _model
-    if _model is None:
-        try:
-            from faster_whisper import WhisperModel
-            from app.config import get_settings
-
-            settings = get_settings()
-            _model = WhisperModel(
-                settings.whisper_model_size,
-                device=settings.whisper_device,
-                compute_type="float16",
-            )
-            logger.info("whisper_model_loaded", size=settings.whisper_model_size)
-        except Exception as e:
-            logger.warning("whisper_model_not_available", error=str(e))
-    return _model
+def _wrap_pcm_as_wav(audio_bytes: bytes, sample_rate: int = 16000) -> io.BytesIO:
+    """Wrap raw 16-bit PCM bytes into a WAV container for the OpenAI API."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(sample_rate)
+        wf.writeframes(audio_bytes)
+    buffer.seek(0)
+    buffer.name = "audio.wav"
+    return buffer
 
 
 async def transcribe_audio(audio_bytes: bytes) -> str | None:
     """
-    Transcribe audio bytes to text.
+    Transcribe audio bytes to text using OpenAI Whisper API.
 
     Args:
         audio_bytes: Raw audio data (16kHz, mono, 16-bit PCM).
@@ -42,21 +42,22 @@ async def transcribe_audio(audio_bytes: bytes) -> str | None:
     Returns:
         Transcribed text or None if transcription fails.
     """
-    model = _get_model()
-    if model is None:
-        logger.warning("stt_skipped_no_model")
+    if not audio_bytes:
         return None
 
+    settings = get_settings()
+    client = _get_client()
+
     try:
-        audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
-        audio_array /= 32768.0  # normalize to [-1, 1]
-
-        segments, info = model.transcribe(audio_array, beam_size=5, language="en")
-        text = " ".join(segment.text for segment in segments).strip()
-
+        wav_buffer = _wrap_pcm_as_wav(audio_bytes)
+        response = await client.audio.transcriptions.create(
+            model=settings.openai_stt_model,
+            file=wav_buffer,
+            language="es",
+        )
+        text = response.text.strip()
         if text:
-            logger.info("stt_transcription", text=text[:100], language=info.language)
-
+            logger.info("stt_transcription", text=text[:100])
         return text if text else None
 
     except Exception as e:
