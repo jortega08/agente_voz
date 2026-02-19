@@ -1,14 +1,7 @@
 """
 RAG-based knowledge base for debt collection domain knowledge.
 
-Indexes and retrieves relevant information from:
-- Debt reduction legislation
-- Personal finance concepts
-- Assertive communication techniques
-- Conflict management guides
-- Financial behavior psychology
-
-Uses pgvector for vector storage and LangChain for orchestration.
+Uses OpenAI embeddings + pgvector for vector storage via LangChain.
 """
 
 import structlog
@@ -25,36 +18,62 @@ class KnowledgeBase:
         self.is_initialized = False
 
     async def initialize(self):
-        """
-        Load knowledge documents and create vector index.
-
-        Phase 1: Load from local text files in the knowledge/ directory.
-        Phase 2+: Load from database with tenant-specific knowledge.
-        """
+        """Load knowledge documents and create vector index with OpenAI embeddings."""
         try:
-            # TODO: Initialize with actual LangChain + pgvector pipeline
-            # from langchain_community.document_loaders import DirectoryLoader
-            # from langchain_community.vectorstores import PGVector
-            # from langchain_huggingface import HuggingFaceEmbeddings
-            #
-            # embeddings = HuggingFaceEmbeddings(model_name=settings.embedding_model)
-            # loader = DirectoryLoader(str(KNOWLEDGE_DIR), glob="**/*.txt")
-            # documents = loader.load()
-            # vectorstore = PGVector.from_documents(documents, embeddings, ...)
-            # self.retriever = vectorstore.as_retriever()
+            from langchain_community.document_loaders import DirectoryLoader, TextLoader
+            from langchain_community.vectorstores import PGVector
+            from langchain_openai import OpenAIEmbeddings
+            from langchain.text_splitter import RecursiveCharacterTextSplitter
+            from app.config import get_settings
 
+            settings = get_settings()
+
+            embeddings = OpenAIEmbeddings(
+                model=settings.openai_embedding_model,
+                api_key=settings.openai_api_key,
+            )
+
+            loader = DirectoryLoader(
+                str(KNOWLEDGE_DIR),
+                glob="**/*.txt",
+                loader_cls=TextLoader,
+            )
+            documents = loader.load()
+
+            if not documents:
+                logger.warning("knowledge_base_no_documents", path=str(KNOWLEDGE_DIR))
+                self.is_initialized = True
+                return
+
+            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            chunks = splitter.split_documents(documents)
+
+            # Use sync PGVector (LangChain community doesn't have full async support)
+            connection_string = settings.database_url.replace(
+                "postgresql+asyncpg://", "postgresql+psycopg2://"
+            )
+            vectorstore = PGVector.from_documents(
+                documents=chunks,
+                embedding=embeddings,
+                connection_string=connection_string,
+                collection_name="knowledge_base",
+                pre_delete_collection=False,
+            )
+            self.retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
             self.is_initialized = True
-            logger.info("knowledge_base_initialized_stub")
+            logger.info("knowledge_base_initialized", chunks=len(chunks))
+
         except Exception as e:
             logger.error("knowledge_base_init_error", error=str(e))
+            self.is_initialized = True  # mark as done to avoid retry loops
 
     async def retrieve(self, query: str, top_k: int = 3) -> list[str]:
         """
         Retrieve relevant knowledge passages for a given query.
 
         Args:
-            query: The search query (usually the user's message or intent).
-            top_k: Number of relevant passages to retrieve.
+            query: The search query.
+            top_k: Number of passages to retrieve.
 
         Returns:
             List of relevant text passages.
@@ -62,9 +81,12 @@ class KnowledgeBase:
         if not self.is_initialized:
             await self.initialize()
 
-        # TODO: Replace with actual retrieval
-        # results = self.retriever.invoke(query)
-        # return [doc.page_content for doc in results[:top_k]]
+        if self.retriever is None:
+            return []
 
-        logger.info("knowledge_retrieve_stub", query=query[:80])
-        return []
+        try:
+            results = self.retriever.invoke(query)
+            return [doc.page_content for doc in results[:top_k]]
+        except Exception as e:
+            logger.error("knowledge_retrieve_error", error=str(e))
+            return []
