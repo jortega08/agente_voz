@@ -1,0 +1,47 @@
+{
+  "name": "Agente Voz",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "backend",
+  "workspaceFolder": "/app",
+
+  "forwardPorts": [8000, 3000, 5432, 6379],
+  "portsAttributes": {
+    "8000": { "label": "Backend (FastAPI)", "onAutoForward": "notify" },
+    "3000": { "label": "Frontend (Next.js)", "onAutoForward": "openBrowser" },
+    "5432": { "label": "PostgreSQL", "onAutoForward": "silent" },
+    "6379": { "label": "Redis", "onAutoForward": "silent" }
+  },
+
+  "secrets": {
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API key (get it from platform.openai.com)",
+      "documentationUrl": "https://platform.openai.com/api-keys"
+    }
+  },
+
+  "remoteEnv": {
+    "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "cweijan.vscode-database-client2",
+        "bradlc.vscode-tailwindcss"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        }
+      }
+    }
+  },
+
+  "postStartCommand": "echo '✅ Stack listo. Backend: http://localhost:8000 | Frontend: http://localhost:3000'"
+}

@@ -47,6 +47,8 @@ logs/
 
 # ML Models (too large for git)
 models/
+!backend/app/models/
+!backend/app/models/**
 *.bin
 *.pt
 *.onnx
