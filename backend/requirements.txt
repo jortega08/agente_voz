@@ -15,10 +15,10 @@ pgvector==0.3.6
 redis[hiredis]==5.2.1
 
 # AI / ML - OpenAI APIs (no modelos locales)
-openai==1.68.0
-langchain==1.2.9
-langchain-community==0.4.1
-langchain-openai==1.1.9
+openai>=1.109.1,<2
+langchain>=1.2,<2
+langchain-community>=0.4,<1
+langchain-openai>=1.1,<2
 psycopg2-binary==2.9.10
 
 # HTTP
